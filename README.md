@@ -14,7 +14,7 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-
     进入 Access > Tunnels
     找到你的隧道 → Configure
     添加 Public Hostname：
-        Hostname: huihechow89.dpdns.org
+        Hostname: 自定义域名
         URL: https://localhost:2096
         ✅ Enable "Disable TLS verification"（关键！否则自签证书失败）
 
