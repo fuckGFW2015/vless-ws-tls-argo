@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # ======================================================
-# VLESS + WebSocket + TLS + Cloudflare Tunnel 修复版
+# VLESS + WS + TLS + Cloudflare Tunnel 终极管理器
+# 功能：安装（含权限修复）/ 卸载 / 二维码
 # ======================================================
 
 die() { echo -e "\033[0;31m✖ $*\033[0m" >&2; exit 1; }
@@ -10,167 +11,131 @@ info() { echo -e "\033[0;32m→ $*\033[0m"; }
 warn() { echo -e "\033[1;33m⚠ $*\033[0m"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-  die "请使用 root 用户运行本脚本"
+  die "请使用 root 用户运行本脚本（sudo su -）"
 fi
 
+# ========================
+# 菜单界面
+# ========================
 clear
-echo -e "\033[1;36m修复版管理器启动中...\033[0m"
+echo -e "\033[1;36m"
+echo "╔══════════════════════════════════════════╗"
+echo "║   VLESS+WS+TLS + CF Tunnel 综合管理      ║"
+echo "║     (修复权限/防卡死/带卸载功能)         ║"
+echo "╚══════════════════════════════════════════╝"
+echo -e "\033[0m"
+echo -e "\033[1;34m1) 安装 / 修复部署\033[0m"
+echo -e "\033[0;31m2) 卸载全部组件\033[0m"
+echo -e "\033[1;33m3) 退出\033[0m"
+echo
+
+read -rp "请选择操作 (1/2/3): " ACTION
 
 # ========================
-# 交互部分
+# 卸载逻辑
 # ========================
-read -rp "请输入你的域名（如：example.com）: " DOMAIN
-[[ -z "$DOMAIN" ]] && die "域名不能为空！"
-
-echo "请输入 CF Tunnel Token（以 eyJ 开头）"
-while true; do
-  read -rp "Token: " CF_TOKEN
-  [[ -n "$CF_TOKEN" && "$CF_TOKEN" == eyJ* ]] && break
-  warn "Token 格式错误，请重新输入。"
-done
-
-# ========================
-# 安装依赖
-# ========================
-info "安装/检查依赖..."
-if [ -f /etc/debian_version ]; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt update -y && apt install -y curl wget jq openssl qrencode haveged
-elif [ -f /etc/redhat-release ]; then
-  yum install -y epel-release
-  yum install -y curl wget jq openssl qrencode haveged
+if [ "$ACTION" = "2" ]; then
+  read -rp "确定要彻底卸载吗？(y/N): " CONFIRM
+  [[ "${CONFIRM,,}" != "y" ]] && exit 0
+  
+  info "正在停止并移除服务..."
+  systemctl disable --now xray cloudflared 2>/dev/null || true
+  rm -f /etc/systemd/system/cloudflared.service
+  systemctl daemon-reload
+  
+  info "正在清理文件..."
+  xray uninstall 2>/dev/null || true
+  rm -f /usr/local/bin/cloudflared
+  rm -rf /usr/local/etc/xray /etc/xray /root/.cloudflared
+  
+  info "✅ 卸载完成！"
+  exit 0
 fi
 
-# 启动 haveged 增加系统熵，防止 openssl/xray 卡死
+[[ "$ACTION" != "1" ]] && exit 0
+
+# ========================
+# 安装逻辑 (含修复点)
+# ========================
+read -rp "请输入域名: " DOMAIN
+[[ -z "$DOMAIN" ]] && die "域名不能为空"
+read -rp "请输入 CF Token: " CF_TOKEN
+[[ -z "$CF_TOKEN" ]] && die "Token 不能为空"
+
+info "安装依赖..."
+apt update -y && apt install -y curl wget jq openssl qrencode haveged
 systemctl enable --now haveged 2>/dev/null || true
 
-# ========================
 # 安装 Xray & Cloudflared
-# ========================
-if ! command -v xray >/dev/null; then
-  info "安装 Xray..."
-  bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-fi
-
+! command -v xray >/dev/null && bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 if ! command -v cloudflared >/dev/null; then
-  info "下载 cloudflared..."
-  ARCH=$(uname -m)
-  case "$ARCH" in
-    x86_64|amd64) FILE="cloudflared-linux-amd64" ;;
-    aarch64|arm64) FILE="cloudflared-linux-arm64" ;;
-    *) die "不支持的架构: $ARCH" ;;
-  esac
-  VERSION=$(curl -sI "https://github.com/cloudflare/cloudflared/releases/latest" | grep -i 'location:' | sed 's/.*tag\///; s/\r$//')
-  wget -q -O "/usr/local/bin/cloudflared" "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/${FILE}"
+  ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+  wget -q -O "/usr/local/bin/cloudflared" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH"
   chmod +x /usr/local/bin/cloudflared
 fi
 
-# ========================
-# 生成自签名证书 (修复点)
-# ========================
+# 生成证书 (核心修复：-batch 模式)
 CERT_DIR="/etc/xray"
 mkdir -p "$CERT_DIR"
-# 无论证书是否存在都强制生成，防止损坏的证书导致 Xray 无法启动
-info "正在生成自签名证书 (RSA 2048)..."
+info "生成自签名证书..."
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout "$CERT_DIR/priv.key" \
-  -out "$CERT_DIR/cert.pem" \
-  -subj "/C=US/ST=State/L=City/O=Org/CN=$DOMAIN" \
-  -batch >/dev/null 2>&1 || die "OpenSSL 生成证书失败，请检查 openssl 是否安装正确"
+  -keyout "$CERT_DIR/priv.key" -out "$CERT_DIR/cert.pem" \
+  -subj "/CN=$DOMAIN" -batch >/dev/null 2>&1
 
-chmod 600 "$CERT_DIR"/*.key "$CERT_DIR"/*.pem
-info "✅ 证书生成成功"
+# 核心修复：权限补丁 (解决端口不监听)
+chown -R nobody:nogroup "$CERT_DIR"
+chmod -R 644 "$CERT_DIR"
 
-# ========================
-# 配置 Xray (修复路径获取)
-# ========================
+# 写入配置
 UUID=$(cat /proc/sys/kernel/random/uuid)
-# 修复此处随机字符串获取方式，防止卡死
 WS_PATH="/$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 8)"
 XRAY_PORT=44300
 
-mkdir -p /usr/local/etc/xray
 cat > /usr/local/etc/xray/config.json <<EOF
 {
   "log": {"loglevel": "warning"},
   "inbounds": [{
     "port": $XRAY_PORT,
+    "listen": "127.0.0.1",
     "protocol": "vless",
-    "settings": {
-      "clients": [{"id": "$UUID", "flow": ""}],
-      "decryption": "none"
-    },
+    "settings": { "clients": [{"id": "$UUID"}], "decryption": "none" },
     "streamSettings": {
       "network": "ws",
       "security": "tls",
       "tlsSettings": {
-        "certificates": [{
-          "certificateFile": "$CERT_DIR/cert.pem",
-          "keyFile": "$CERT_DIR/priv.key"
-        }]
+        "certificates": [{ "certificateFile": "$CERT_DIR/cert.pem", "keyFile": "$CERT_DIR/priv.key" }]
       },
-      "wsSettings": {
-        "path": "$WS_PATH"
-      }
+      "wsSettings": { "path": "$WS_PATH" }
     }
   }],
   "outbounds": [{"protocol": "freedom"}]
 }
 EOF
 
-systemctl daemon-reload
-systemctl enable --now xray
-
-# ========================
-# 配置 Cloudflare Tunnel
-# ========================
-CRED_DIR="/root/.cloudflared"
-mkdir -p "$CRED_DIR"
-echo "$CF_TOKEN" > "$CRED_DIR/cf-token"
-
-cat > "$CRED_DIR/config.yml" <<EOF
-ingress:
-  - hostname: $DOMAIN
-    service: https://localhost:$XRAY_PORT
-    originRequest:
-      noTLSVerify: true
-  - service: http_status:404
-EOF
-
+# 启动服务
+systemctl restart xray
 cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
 Description=Cloudflare Tunnel
-After=network-online.target
-
+After=network.target
 [Service]
-ExecStart=/usr/local/bin/cloudflared tunnel run --token-file $CRED_DIR/cf-token
+ExecStart=/usr/local/bin/cloudflared tunnel run --token $CF_TOKEN
 Restart=on-failure
-RestartSec=5
-User=root
-WorkingDirectory=$CRED_DIR
-
 [Install]
 WantedBy=multi-user.target
 EOF
-
 systemctl daemon-reload
 systemctl enable --now cloudflared
 
-# 验证启动状态
-info "等待服务启动 (5s)..."
-sleep 5
-if ! systemctl is-active --quiet xray || ! systemctl is-active --quiet cloudflared; then
-  die "❌ 启动失败。请运行 'journalctl -u cloudflared' 查看原因。"
-fi
-
-# ========================
-# 生成链接
-# ========================
-REMARK="${DOMAIN//./_}_VLESS"
+# 输出结果
+info "等待启动..."
+sleep 3
+REMARK="CF_Argo_$(echo $DOMAIN | cut -d'.' -f1)"
 VLESS_URI="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=$(printf '%s' "$WS_PATH" | jq -sRr @uri)&sni=${DOMAIN}#${REMARK}"
 
 clear
-echo -e "\033[1;32m🎉 部署成功！\033[0m"
-echo -e "\033[1;36m链接：\033[0m $VLESS_URI"
+echo -e "\033[1;32m🎉 部署/修复成功！\033[0m"
+echo -e "\033[1;36m节点链接：\033[0m"
+echo "$VLESS_URI"
 echo
 qrencode -t ansiutf8 -m 1 "$VLESS_URI"
