@@ -21,7 +21,7 @@ is_installed() {
 # 卸载函数
 # ======================
 uninstall() {
-    info "开始卸载 Vargo Argo 服务..."
+    info "开始卸载 CF Argo 服务..."
 
     # 停止并禁用服务
     systemctl stop xray cloudflared 2>/dev/null || true
@@ -38,7 +38,7 @@ uninstall() {
     # 清理日志
     journalctl --vacuum-time=1s --quiet || true
 
-    warn "已卸载 Vargo Argo 服务及相关配置。"
+    warn "已卸载 CF Argo 服务及相关配置。"
     warn "如需完全移除 Xray，请手动执行:"
     echo "  bash -c '\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)' @ remove"
     exit 0
@@ -189,7 +189,7 @@ EOF
 show_menu() {
     clear
     echo "========================================"
-    echo "   Vargo Argo 部署工具 (Xray + CF Tunnel)"
+    echo "   VLESS-WS-TLS + CF Tunnel部署工具"
     echo "========================================"
     echo "1) 安装服务"
     echo "2) 卸载服务"
@@ -209,7 +209,7 @@ show_menu() {
 # 入口
 # ======================
 if is_installed; then
-    warn "检测到已安装 Vargo Argo 服务。"
+    warn "检测到已安装 CF Argo 服务。"
 fi
 
 show_menu
