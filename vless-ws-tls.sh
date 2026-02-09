@@ -8,37 +8,96 @@ die() { echo -e "\033[0;31m✖ $*\033[0m" >&2; exit 1; }
 
 [ "$(id -u)" -ne 0 ] && die "请使用 root 运行"
 
-# 1. 基础安装
-info "正在安装核心依赖..."
-apt update -y && apt install -y curl wget jq openssl qrencode haveged
-systemctl enable --now haveged >/dev/null 2>&1
+readonly CONFIG_DIR="/usr/local/etc/xray"
+readonly CERT_DIR="/etc/xray"
+readonly CF_SERVICE="/etc/systemd/system/cloudflared.service"
+readonly SCRIPT_NAME="$(basename "$0")"
 
-# 2. 交互输入
-read -rp "请输入域名 (如 vargo.xxx.xxx): " DOMAIN
-read -rp "请输入 CF Token: " CF_TOKEN
+# 检测是否已安装
+is_installed() {
+    [ -f "$CONFIG_DIR/config.json" ] || [ -f "$CF_SERVICE" ]
+}
 
-# 3. 下载/修复 Cloudflared
-info "安装 Cloudflared..."
-ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-wget -q -O /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH"
-chmod +x /usr/local/bin/cloudflared
+# ======================
+# 卸载函数
+# ======================
+uninstall() {
+    info "开始卸载 Vargo Argo 服务..."
 
-# 4. 安装/配置 Xray
-info "配置 Xray (端口: 2096)..."
-! command -v xray >/dev/null && bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+    # 停止并禁用服务
+    systemctl stop xray cloudflared 2>/dev/null || true
+    systemctl disable xray cloudflared 2>/dev/null || true
 
-# 生成证书并强制放开权限 (核心修复)
-CERT_DIR="/etc/xray"
-mkdir -p "$CERT_DIR"
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout "$CERT_DIR/priv.key" -out "$CERT_DIR/cert.pem" -subj "/CN=$DOMAIN" -batch >/dev/null 2>&1
-# 关键权限：确保 nobody 用户能读
-chown -R nobody:nogroup "$CERT_DIR"
-chmod -R 755 "$CERT_DIR"
+    # 删除服务文件
+    rm -f "$CF_SERVICE"
+    systemctl daemon-reload
 
-# 写入配置
-UUID=$(cat /proc/sys/kernel/random/uuid)
-WS_PATH="/vargo$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 4)"
-cat > /usr/local/etc/xray/config.json <<EOF
+    # 删除二进制（仅当是本脚本安装的）
+    if [ -f /usr/local/bin/cloudflared ] && ! command -v cloudflared >/dev/null 2>&1; then
+        rm -f /usr/local/bin/cloudflared
+    fi
+
+    # 删除 Xray（谨慎：只删配置，不删二进制除非确认是脚本安装）
+    rm -rf "$CONFIG_DIR"
+    rm -rf "$CERT_DIR"
+
+    # 清理 systemd 日志（可选）
+    journalctl --vacuum-time=1s --quiet || true
+
+    warn "已卸载 Vargo Argo 服务及相关配置。"
+    warn "如需完全移除 Xray，请手动执行: bash -c '\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)' @ remove"
+    exit 0
+}
+
+# ======================
+# 安装函数
+# ======================
+install() {
+    if is_installed; then
+        warn "检测到已安装，将覆盖现有配置。"
+        read -rp "继续？(y/N): " -n 1 -r
+        echo
+        [[ ! $REPLY =~ ^[Yy]$ ]] && exit 0
+    fi
+
+    # 1. 基础依赖
+    info "正在安装核心依赖..."
+    apt update -y && apt install -y curl wget jq openssl qrencode haveged
+    systemctl enable --now haveged >/dev/null 2>&1
+
+    # 2. 用户输入
+    read -rp "请输入域名 (如 vargo.example.com): " DOMAIN
+    read -rsp "请输入 Cloudflare Tunnel Token: " CF_TOKEN
+    echo
+
+    # 3. 安装 Cloudflared
+    info "安装 Cloudflared..."
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    if ! command -v cloudflared >/dev/null; then
+        wget -q -O /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH" \
+            || die "下载 cloudflared 失败"
+        chmod +x /usr/local/bin/cloudflared
+    fi
+
+    # 4. 安装 Xray（如果未安装）
+    info "配置 Xray (端口: 2096)..."
+    if ! command -v xray >/dev/null; then
+        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+    fi
+
+    # 5. 生成证书（自签名）
+    mkdir -p "$CERT_DIR"
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$CERT_DIR/priv.key" -out "$CERT_DIR/cert.pem" \
+        -subj "/CN=$DOMAIN" -batch >/dev/null 2>&1
+    chown -R nobody:nogroup "$CERT_DIR"
+    chmod -R 755 "$CERT_DIR"
+
+    # 6. 生成配置
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+    WS_PATH="/vargo$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 6)"
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/config.json" <<EOF
 {
   "log": {"loglevel": "warning"},
   "inbounds": [{
@@ -59,43 +118,89 @@ cat > /usr/local/etc/xray/config.json <<EOF
 }
 EOF
 
-# 5. 启动服务
-info "启动服务中..."
-systemctl restart xray
-cat > /etc/systemd/system/cloudflared.service <<EOF
+    # 7. 启动 Xray
+    systemctl restart xray
+
+    # 8. 配置 Cloudflared 服务
+    cat > "$CF_SERVICE" <<EOF
 [Unit]
 Description=Cloudflare Tunnel
 After=network.target
+
 [Service]
+User=nobody
+Group=nogroup
 ExecStart=/usr/local/bin/cloudflared tunnel run --protocol grpc --token $CF_TOKEN
 Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
-systemctl enable --now cloudflared
 
-# 6. 自动化健康检查 (带有重试机制)
-info "🔎 执行健康检查 (最多等待 10 秒)..."
-for i in {1..10}; do
-    if ss -tulpn | grep -q ":2096 "; then
-        CHECK_PORT="OK"
-        break
+    systemctl daemon-reload
+    systemctl enable --now cloudflared
+
+    # 9. 健康检查
+    info "🔎 执行健康检查 (最多等待 10 秒)..."
+    CHECK_PORT=""
+    for i in {1..10}; do
+        if ss -tulpn 2>/dev/null | grep -q ":2096 "; then
+            CHECK_PORT="OK"
+            break
+        fi
+        sleep 1
+    done
+
+    XRAY_S=$(systemctl is-active xray 2>/dev/null || echo "inactive")
+    CF_S=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
+
+    echo "----------------------------------------"
+    [ "$XRAY_S" == "active" ] && echo -e "✅ Xray 进程: 在线" || warn "❌ Xray 进程: 离线"
+    [ "${CHECK_PORT:-}" == "OK" ] && echo -e "✅ 2096 监听: 成功" || warn "❌ 2096 监听: 失败"
+    [ "$CF_S" == "active" ] && echo -e "✅ Argo 隧道: 在线" || warn "❌ Argo 隧道: 离线"
+    echo "----------------------------------------"
+
+    # 10. 输出节点信息
+    VLESS_URI="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=$(printf '%s' "$WS_PATH" | jq -sRr @uri)&sni=${DOMAIN}#Argo_2096"
+    info "🎉 部署完成！"
+    echo -e "\n\033[1;36m$VLESS_URI\033[0m\n"
+    if command -v qrencode >/dev/null; then
+        qrencode -t ansiutf8 -m 1 "$VLESS_URI"
+    else
+        warn "qrencode 未安装，跳过二维码生成"
     fi
-    sleep 1
-done
+}
 
-XRAY_S=$(systemctl is-active xray || echo "inactive")
-CF_S=$(systemctl is-active cloudflared || echo "inactive")
+# ======================
+# 主菜单
+# ======================
+show_menu() {
+    clear
+    echo "========================================"
+    echo "   Vargo Argo 部署工具 (Xray + CF Tunnel)"
+    echo "========================================"
+    echo "1) 安装服务"
+    echo "2) 卸载服务"
+    echo "3) 退出"
+    echo "----------------------------------------"
+    read -rp "请选择操作 [1-3]: " choice
 
-echo "----------------------------------------"
-[ "$XRAY_S" == "active" ] && echo -e "✅ Xray 进程: 在线" || warn "❌ Xray 进程: 离线"
-[ "${CHECK_PORT:-}" == "OK" ] && echo -e "✅ 2096 监听: 成功" || warn "❌ 2096 监听: 失败 (请检查日志)"
-[ "$CF_S" == "active" ] && echo -e "✅ Argo 隧道: 在线" || warn "❌ Argo 隧道: 离线"
-echo "----------------------------------------"
+    case $choice in
+        1) install ;;
+        2) uninstall ;;
+        3) exit 0 ;;
+        *) die "无效选项，请输入 1、2 或 3" ;;
+    esac
+}
 
-# 7. 节点信息
-VLESS_URI="vless://${UUID}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=$(printf '%s' "$WS_PATH" | jq -sRr @uri)&sni=${DOMAIN}#Argo_2096"
-info "🎉 部署尝试完成！"
-echo -e "\033[1;36m$VLESS_URI\033[0m"
-qrencode -t ansiutf8 -m 1 "$VLESS_URI"
+# ======================
+# 入口
+# ======================
+if is_installed; then
+    warn "检测到已安装 Vargo Argo 服务。"
+fi
+
+show_menu
