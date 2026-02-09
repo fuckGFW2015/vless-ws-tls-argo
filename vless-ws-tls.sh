@@ -125,7 +125,7 @@ After=network.target
 [Service]
 User=nobody
 Group=nogroup
-ExecStart=/usr/local/bin/cloudflared tunnel run --protocol grpc --token "$CF_TOKEN"
+ExecStart=/usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN"
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
