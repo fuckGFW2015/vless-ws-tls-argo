@@ -1,23 +1,33 @@
 #!/bin/bash
 
-# 1. 交互式输入 (仅在第一次部署时询问)
-echo "========== LuneHosts 全自动部署 =========="
-read -p "请输入 Cloudflare Tunnel Token: " CF_TOKEN
-read -p "请输入你的域名: " MY_DOMAIN
-read -p "请输入 UUID (回车随机): " INPUT_UUID
+echo "========== LuneHosts 交互式部署 =========="
+
+# 使用 echo 强制回显提示，再用 read 接收
+echo "👉 步骤 1: 请输入 Cloudflare Token"
+read CF_TOKEN
+
+echo "👉 步骤 2: 请输入你的域名 (如 node.abc.com)"
+read MY_DOMAIN
+
+echo "👉 步骤 3: 请输入 UUID (直接回车随机生成)"
+read INPUT_UUID
 MY_UUID=${INPUT_UUID:-$(cat /proc/sys/kernel/random/uuid)}
-read -p "请输入路径 (回车默认 /lune): " INPUT_PATH
+
+echo "👉 步骤 4: 请输入路径 (直接回车默认 /lune)"
+read INPUT_PATH
 MY_PATH=${INPUT_PATH:-/lune}
 
-# 2. 下载必要组件
-echo "正在下载 Xray 和 Cloudflared..."
+echo "------------------------------------------"
+echo "⏳ 正在拉取组件并生成配置..."
+
+# 1. 下载程序
 curl -L -s -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 unzip -qo xray.zip
 chmod +x xray
 curl -L -s -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
 chmod +x cloudflared
 
-# 3. 生成 Xray 配置文件 (config.json)
+# 2. 生成 Xray 配置
 cat <<EOF > config.json
 {
     "inbounds": [{
@@ -31,35 +41,28 @@ cat <<EOF > config.json
 }
 EOF
 
-# 4. 【核心】自动生成 start.sh 守护脚本
-echo "正在生成守护脚本 start.sh..."
+# 3. 生成永久守护脚本 start.sh (把变量写死进去)
 cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
 chmod +x xray cloudflared
-# 启动隧道
 nohup ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1 &
 sleep 2
-# 启动 Xray (前台运行保持容器不灭)
 ./xray -c config.json
 EOF
-
 chmod +x start.sh
 
-# 5. 输出节点信息
-VMESS_LINK="vless://$MY_UUID@$MY_DOMAIN:443?encryption=none&security=tls&type=ws&host=$MY_DOMAIN&path=$(echo $MY_PATH | sed 's/\//%2F/g')#Lune_Argo"
-
+# 4. 给出反馈
 clear
-echo "=========================================="
-echo -e "\033[32m🎉 部署成功！\033[0m"
-echo -e "你的节点链接：\033[33m$VMESS_LINK\033[0m"
-echo "=========================================="
-echo "⚠️  重要步骤："
-echo "1. 请前往面板的 [Startup] 设置。"
-echo "2. 将 [Startup Command] 修改为: bash start.sh"
-echo "3. 修改完成后，点击面板的 [RESTART] 重启服务器。"
-echo "=========================================="
+echo "✅ 部署完成！"
+echo "UUID: $MY_UUID"
+echo "Path: $MY_PATH"
+echo "------------------------------------------"
+echo "⚠️  最后一步 (防断连):"
+echo "1. 停止服务器。"
+echo "2. 在 Startup Command 填入: bash start.sh"
+echo "3. 重启服务器。"
+echo "------------------------------------------"
 
-# 6. 第一次运行直接启动
-echo "正在尝试首次启动..."
+# 启动尝试
 bash start.sh
