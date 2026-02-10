@@ -33,3 +33,5 @@ curl -Ls https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-argo/refs/he
 
     Hostname: 填你的自定义域名。
     
+安装完成后，先stop服务器，然后去修改 Startup Command 为 bash start.sh,最后再点start启动服务器
+
