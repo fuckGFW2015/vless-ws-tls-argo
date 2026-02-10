@@ -46,10 +46,22 @@ EOF
 cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
+
+# 检查并清理可能残留的旧进程，防止端口占用或 Token 冲突
+pkill -9 xray
+pkill -9 cloudflared
+
 chmod +x xray cloudflared
+
+# 启动隧道并记录日志
+# 使用 run --token 是最稳定的方式
 nohup ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1 &
-sleep 2
-./xray -c config.json
+
+# 等待隧道握手
+sleep 5
+
+# 使用 exec 接管进程，让面板直接监控 Xray，效率更高
+exec ./xray -c config.json
 EOF
 chmod +x start.sh
 
