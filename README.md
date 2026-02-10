@@ -14,8 +14,8 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-
     进入 Access > Tunnels
     找到你的隧道 → Configure
     添加 Public Hostname：
-        Hostname: 自定义域名
-        URL: https://localhost:2096
+        Hostname: 带前缀自定义域名
+        URL: 选https填写localhost:2096
         ✅ Enable "Disable TLS verification"（关键！否则自签证书失败）
 
     💡 这样既避免了本地配置冲突，又利用了 CF 的 NoTLSVerify 开关。
