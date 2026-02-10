@@ -25,7 +25,7 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-
 ```
 curl -Ls https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-argo/refs/heads/main/lunehost_deploy.sh -o lunehost_deploy.sh && bash lunehost_deploy.sh
 
-``
+```
 
 脚本跑完后，需要去 Cloudflare 网页后台，把那个 Tunnel 的 Public Hostname 设置为：
 
