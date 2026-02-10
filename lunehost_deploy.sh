@@ -1,8 +1,9 @@
 #!/bin/bash
 
-echo "========== LuneHosts 交互式部署 =========="
+clear
+echo "========== LuneHosts 交互式部署 (含链接生成) =========="
 
-# 使用 echo 强制回显提示，再用 read 接收
+# 1. 交互输入提醒
 echo "👉 步骤 1: 请输入 Cloudflare Token"
 read CF_TOKEN
 
@@ -13,21 +14,21 @@ echo "👉 步骤 3: 请输入 UUID (直接回车随机生成)"
 read INPUT_UUID
 MY_UUID=${INPUT_UUID:-$(cat /proc/sys/kernel/random/uuid)}
 
-echo "👉 步骤 4: 请输入路径 (直接回车默认 /lune)"
+echo "👉 步骤 4: 请输入路径 (必须以/开头，直接回车默认 /lune)"
 read INPUT_PATH
 MY_PATH=${INPUT_PATH:-/lune}
 
 echo "------------------------------------------"
 echo "⏳ 正在拉取组件并生成配置..."
 
-# 1. 下载程序
+# 2. 下载程序
 curl -L -s -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 unzip -qo xray.zip
 chmod +x xray
 curl -L -s -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
 chmod +x cloudflared
 
-# 2. 生成 Xray 配置
+# 3. 生成 Xray 配置
 cat <<EOF > config.json
 {
     "inbounds": [{
@@ -41,7 +42,7 @@ cat <<EOF > config.json
 }
 EOF
 
-# 3. 生成永久守护脚本 start.sh (把变量写死进去)
+# 4. 生成永久守护脚本 start.sh
 cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
@@ -52,17 +53,30 @@ sleep 2
 EOF
 chmod +x start.sh
 
-# 4. 给出反馈
+# 5. 【核心】拼接 VLESS 链接
+# 处理路径中的斜杠以便用于 URL
+SAFE_PATH=$(echo $MY_PATH | sed 's/\//%2F/g')
+VLESS_LINK="vless://$MY_UUID@$MY_DOMAIN:443?encryption=none&security=tls&type=ws&host=$MY_DOMAIN&path=$SAFE_PATH#Lune_Argo"
+
+# 6. 最终输出
 clear
-echo "✅ 部署完成！"
+echo "=========================================="
+echo -e "\033[32m✅ 部署成功！\033[0m"
+echo ""
+echo "📝 你的节点配置信息："
+echo "域名: $MY_DOMAIN"
 echo "UUID: $MY_UUID"
-echo "Path: $MY_PATH"
-echo "------------------------------------------"
-echo "⚠️  最后一步 (防断连):"
-echo "1. 停止服务器。"
-echo "2. 在 Startup Command 填入: bash start.sh"
-echo "3. 重启服务器。"
-echo "------------------------------------------"
+echo "路径: $MY_PATH"
+echo ""
+echo "🔗 VLESS 链接 (直接复制到客户端):"
+echo -e "\033[33m$VLESS_LINK\033[0m"
+echo ""
+echo "=========================================="
+echo "⚠️  最后一步 (关掉网页不断线):"
+echo "1. 停止(STOP)服务器。"
+echo "2. 在 [Startup] 菜单的 Startup Command 填入: bash start.sh"
+echo "3. 重新启动(START)服务器。"
+echo "=========================================="
 
 # 启动尝试
 bash start.sh
