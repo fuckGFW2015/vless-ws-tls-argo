@@ -27,9 +27,9 @@ curl -Ls https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-argo/refs/he
 
 ```
 
-脚本跑完后，需要去 Cloudflare 网页后台，把那个 Tunnel 的 Public Hostname 设置为：
+安装之前，需要创建一个隧道，得到一个域名和token,在Cloudflare后台，把那个 Tunnel 的 Public Hostname 设置为：
 
     Service: HTTP://localhost:8080
 
-    Hostname: 填你刚才在脚本里输入的域名。
+    Hostname: 填你的自定义域名。
     
