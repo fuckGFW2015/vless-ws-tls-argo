@@ -47,20 +47,19 @@ cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
 
-# 检查并清理可能残留的旧进程，防止端口占用或 Token 冲突
-pkill -9 xray
-pkill -9 cloudflared
+# 使用更加通用的方式清理旧进程 (不依赖 pkill)
+# 寻找 xray 和 cloudflared 的 PID 并杀掉
+ps -ef | grep -E 'xray|cloudflared' | grep -v grep | awk '{print \$2}' | xargs kill -9 > /dev/null 2>&1
 
 chmod +x xray cloudflared
 
-# 启动隧道并记录日志
-# 使用 run --token 是最稳定的方式
+# 启动隧道
 nohup ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1 &
 
 # 等待隧道握手
 sleep 5
 
-# 使用 exec 接管进程，让面板直接监控 Xray，效率更高
+# 启动 Xray
 exec ./xray -c config.json
 EOF
 chmod +x start.sh
