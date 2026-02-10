@@ -19,3 +19,17 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-
         ✅ Enable "Disable TLS verification"（关键！否则自签证书失败）
 
     💡 这样既避免了本地配置冲突，又利用了 CF 的 NoTLSVerify 开关。
+
+
+### lunehost_deploy部署命令
+```
+curl -Ls https://raw.githubusercontent.com/fuckGFW2015/vless-ws-tls-argo/refs/heads/main/lunehost_deploy.sh -o lunehost_deploy.sh && bash lunehost_deploy.sh
+
+``
+
+脚本跑完后，需要去 Cloudflare 网页后台，把那个 Tunnel 的 Public Hostname 设置为：
+
+    Service: HTTP://localhost:8080
+
+    Hostname: 填你刚才在脚本里输入的域名。
+    
