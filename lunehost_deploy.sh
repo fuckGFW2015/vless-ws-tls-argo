@@ -47,19 +47,28 @@ cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
 
-# 使用更加通用的方式清理旧进程 (不依赖 pkill)
-# 寻找 xray 和 cloudflared 的 PID 并杀掉
-ps -ef | grep -E 'xray|cloudflared' | grep -v grep | awk '{print \$2}' | xargs kill -9 > /dev/null 2>&1
+# 骨灰级静默清理：直接遍历 /proc 文件夹寻找残留进程
+# 这种方法不依赖 ps, pkill 或任何外部工具
+for pid in /proc/[0-9]*; do
+    pid=\${pid##*/}
+    # 检查进程的命令行是否包含 xray 或 cloudflared
+    if grep -qE "xray|cloudflared" "/proc/\$pid/cmdline" 2>/dev/null; then
+        # 确保不杀掉当前脚本进程自己
+        if [ "\$pid" != "\$\$" ]; then
+            kill -9 "\$pid" >/dev/null 2>&1
+        fi
+    fi
+done
 
 chmod +x xray cloudflared
 
 # 启动隧道
 nohup ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1 &
 
-# 等待隧道握手
+# 等待隧道稳固
 sleep 5
 
-# 启动 Xray
+# 启动 Xray 并接管进程
 exec ./xray -c config.json
 EOF
 chmod +x start.sh
