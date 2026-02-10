@@ -1,7 +1,7 @@
 #!/bin/bash
 
 clear
-echo "========== LuneHosts 交互式部署 (含链接生成) =========="
+echo "========== LuneHosts 终极守护版 (含自动重连) =========="
 
 # 1. 交互输入提醒
 echo "👉 步骤 1: 请输入 Cloudflare Token"
@@ -42,18 +42,15 @@ cat <<EOF > config.json
 }
 EOF
 
-# 4. 生成永久守护脚本 start.sh
+# 4. 生成金刚不坏守护脚本 start.sh
 cat <<EOF > start.sh
 #!/bin/bash
 cd /home/container
 
-# 骨灰级静默清理：直接遍历 /proc 文件夹寻找残留进程
-# 这种方法不依赖 ps, pkill 或任何外部工具
+# [洁癖保护] 使用 /proc 彻底清理旧进程，零依赖，无报错
 for pid in /proc/[0-9]*; do
     pid=\${pid##*/}
-    # 检查进程的命令行是否包含 xray 或 cloudflared
     if grep -qE "xray|cloudflared" "/proc/\$pid/cmdline" 2>/dev/null; then
-        # 确保不杀掉当前脚本进程自己
         if [ "\$pid" != "\$\$" ]; then
             kill -9 "\$pid" >/dev/null 2>&1
         fi
@@ -62,41 +59,49 @@ done
 
 chmod +x xray cloudflared
 
-# 启动隧道
-nohup ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1 &
+# [隧道守护] 定义无限循环重连逻辑
+run_tunnel() {
+    while true; do
+        echo "[Argo] 正在建立隧道连接..."
+        ./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > argo.log 2>&1
+        echo "[Argo] 隧道异常退出，5秒后尝试重启..."
+        sleep 5
+    done
+}
 
-# 等待隧道稳固
+# 后台启动隧道守护循环
+run_tunnel &
+
+# [主进程绑定] 等待隧道握手并启动 Xray
+# 使用 exec 使 Xray 成为容器主进程，方便面板监控
 sleep 5
-
-# 启动 Xray 并接管进程
+echo "[Xray] 启动核心程序..."
 exec ./xray -c config.json
 EOF
 chmod +x start.sh
 
-# 5. 【核心】拼接 VLESS 链接
-# 处理路径中的斜杠以便用于 URL
+# 5. 拼接 VLESS 链接
+# 这里的变量需要在生成脚本时就解析好
 SAFE_PATH=$(echo $MY_PATH | sed 's/\//%2F/g')
 VLESS_LINK="vless://$MY_UUID@$MY_DOMAIN:443?encryption=none&security=tls&type=ws&host=$MY_DOMAIN&path=$SAFE_PATH#Lune_Argo"
 
 # 6. 最终输出
 clear
 echo "=========================================="
-echo -e "\033[32m✅ 部署成功！\033[0m"
+echo -e "\033[32m✅ 终极部署完成！\033[0m"
 echo ""
-echo "📝 你的节点配置信息："
+echo "📝 配置摘要："
 echo "域名: $MY_DOMAIN"
 echo "UUID: $MY_UUID"
 echo "路径: $MY_PATH"
 echo ""
-echo "🔗 VLESS 链接 (直接复制到客户端):"
+echo "🔗 节点链接 (直接复制):"
 echo -e "\033[33m$VLESS_LINK\033[0m"
-echo ""
 echo "=========================================="
-echo "⚠️  最后一步 (关掉网页不断线):"
-echo "1. 停止(STOP)服务器。"
-echo "2. 在 [Startup] 菜单的 Startup Command 填入: bash start.sh"
-echo "3. 重新启动(START)服务器。"
+echo "⚠️  操作提示:"
+echo "1. 请确认 Startup Command 已设为: bash start.sh"
+echo "2. 建议先 STOP 再 START 服务器以应用纯净环境。"
 echo "=========================================="
 
-# 启动尝试
+# 首次尝试启动
 bash start.sh
