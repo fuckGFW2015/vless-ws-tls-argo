@@ -1,29 +1,43 @@
 #!/bin/bash
 
-# 1. 输入 Token
-read -p "请输入你的 Cloudflare Tunnel Token: " CF_TOKEN
-read -p "请输入你在 CF 绑定的域名 (例如 node.example.com): " MY_DOMAIN
+# 1. 交互式輸入提醒
+echo "========== LuneHosts 部署配置 =========="
+read -p "請輸入 Cloudflare Tunnel Token: " CF_TOKEN
+read -p "請輸入 UUID (按回車隨機生成): " MY_UUID
+read -p "請輸入 WebSocket 路徑 (例如 /lune, 按回車隨機生成): " MY_PATH
+read -p "請輸入節點域名 (例如 node.example.com): " MY_DOMAIN
+
+# 2. 如果用戶沒輸入，則自動生成
+if [ -z "$MY_UUID" ]; then
+    MY_UUID=$(cat /proc/sys/kernel/random/uuid)
+    echo "使用隨機 UUID: $MY_UUID"
+fi
+
+if [ -z "$MY_PATH" ]; then
+    MY_PATH="/lune$(date +%s | tail -c 4)"
+    echo "使用隨機路徑: $MY_PATH"
+fi
 
 if [ -z "$CF_TOKEN" ] || [ -z "$MY_DOMAIN" ]; then
-    echo "错误：Token 和 域名 均不能为空。"
+    echo "錯誤：Token 和 域名 為必填項！"
     exit 1
 fi
 
-# 2. 安装/更新基础组件
-apt update && apt install -y curl wget jq
+# 3. 下載二進制文件 (針對翼龍面板容器環境)
+echo "正在下載組件..."
+curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+unzip -o xray.zip
+chmod +x xray
 
-# 3. 安装 Xray
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+curl -L -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x cloudflared
 
-# 4. 自动生成随机配置
-MY_UUID=$(cat /proc/sys/kernel/random/uuid)
-MY_PATH="/lune$(date +%s | tail -c 4)"
-
-cat <<EOF > /usr/local/etc/xray/config.json
+# 4. 生成 config.json (本地運行模式)
+cat <<EOF > config.json
 {
     "inbounds": [{
         "port": 8080,
-        "listen": "127.0.0.1",
+        "listen": "0.0.0.0",
         "protocol": "vless",
         "settings": { "clients": [{"id": "$MY_UUID"}], "decryption": "none" },
         "streamSettings": { "network": "ws", "wsSettings": { "path": "$MY_PATH" } }
@@ -32,43 +46,16 @@ cat <<EOF > /usr/local/etc/xray/config.json
 }
 EOF
 
-# 5. 安装并注册 Cloudflared 服务
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
+# 5. 生成 VLESS 節點鏈接並顯示
+VMESS_LINK="vless://$MY_UUID@$MY_DOMAIN:443?encryption=none&security=tls&type=ws&host=$MY_DOMAIN&path=$(echo $MY_PATH | sed 's/\//%2F/g')#Lune_Argo"
 
-cat <<EOF > /etc/systemd/system/cloudflared.service
-[Unit]
-Description=Cloudflare Tunnel
-After=network.target
-[Service]
-ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token $CF_TOKEN
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-EOF
+echo "=========================================="
+echo -e "\033[32m部署完成！您的節點鏈接為：\033[0m"
+echo -e "\033[33m$VMESS_LINK\033[0m"
+echo "=========================================="
 
-# 6. 重启服务
-systemctl daemon-reload
-systemctl restart xray
-systemctl enable xray
-systemctl enable cloudflared
-systemctl restart cloudflared
-
-# 7. 拼接 VLESS 链接
-# 格式: vless://uuid@domain:443?encryption=none&security=tls&type=ws&host=domain&path=path#remark
-VMESS_LINK="vless://$MY_UUID@$MY_DOMAIN:443?encryption=none&security=tls&type=ws&host=$MY_DOMAIN&path=$(echo $MY_PATH | sed 's/\//%2F/g')#LuneHosts_CF_Tunnel"
-
-# 8. 输出结果
-clear
-echo "=========================================="
-echo "🎉 部署完成！"
-echo "=========================================="
-echo -e "\033[33m您的专用 VLESS 链接如下：\033[0m"
-echo -e "\033[32m$VMESS_LINK\033[0m"
-echo "=========================================="
-echo "注意事项："
-echo "1. 请确保 CF 控制台已将 $MY_DOMAIN 指向 http://localhost:8080"
-echo "2. 如果连接不上，请检查 LuneHosts 的系统防火墙是否放行了相关流量"
-echo "3. 链接已包含 TLS 和 WS 设置，直接导入即可使用"
-echo "=========================================="
+# 6. 啟動服務
+# 先在後台運行隧道，最後一行不加 & 以保持容器運行
+echo "正在啟動服務，請勿關閉窗口..."
+./cloudflared tunnel --no-autoupdate run --token $CF_TOKEN > /dev/null 2>&1 &
+./xray -c config.json
